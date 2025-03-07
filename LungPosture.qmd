@@ -1,0 +1,21 @@
+---
+title: "LungPosture"
+---
+
+# Lung Posture Project
+
+## Load Packages
+
+```{r}
+library(renv)
+library(here)
+install.packages("LMMstar")
+library(LMMstar)
+#install.packages("lme4", "longpower")
+library(readXL)
+```
+
+## Statistics
+
+This
+
