@@ -1,21 +1,2704 @@
 ---
 title: "LungPosture"
+format:
+  html:
+    toc: true
+    number-sections: true
+    highlight-style: github
 ---
 
 # Lung Posture Project
 
 ## Load Packages
 
-```{r}
+```{r Packages and options}
+options(scipen = 999)
+set.seed(420)
+round_sig_level = 3
 library(renv)
+#install.packages("here")
 library(here)
-install.packages("LMMstar")
+#install.packages("LMMstar")
 library(LMMstar)
-#install.packages("lme4", "longpower")
-library(readXL)
+library(readxl)
+#install.packages("cellranger")
+library(cellranger)
+#install.packages(c("tidyr","dplyr"))
+library(tidyr)
+library(dplyr)
+#install.packages("ggplot2")
+library(ggplot2)
+#install.packages("quarto")
+library(quarto)
+#install.packages("table1")
+library(table1)
+#install.packages("flextable")
+library(flextable)
+#install.packages("plotly")
+library(plotly)
+#install.packages("multcomp")
+library(multcomp)
+#install.packages("svglite")
+library(svglite)
+#install.packages("cowplot") - These packages are needed if we need to add pictograms to the plots.
+#library(cowplot)
+#install.packages("magick")
+#library(magick)
 ```
 
-## Statistics
+## Load Data
 
-This
+```{r Load Data}
+lung_data<-read_excel(
+  path = here("Data","Data_V2.xlsx")
+)
+```
 
+From Rie (translated by me):
+
+This is Lung_posture data. Some tests have missing data - simply because we couldn't measure in the given position (assumed missing art random). Positions are noted as ''forloeb'':  
+
+1 = Standing. 
+
+2 = Supine. 
+
+3 = Prone.
+
+4 = Handstand. 
+
+```{r Data Wrangling}
+#Lets implement this so we dont have that as a numeric to mess up our data.
+lung_data<-
+  lung_data %>%
+  mutate(
+    posture = factor(
+      x = Forloeb,
+      levels = 1:4,
+      labels = c("Standing",
+                 "Supine",
+                 "Prone",
+                 "Handstand")
+    ),
+    order = factor(rep(1:4, length(lung_data$Forloeb)/4)), #Contacted Rie the order is the order they appear in the excel file.
+    posture = factor(
+      posture,
+      levels = c("Standing",
+                 "Supine",
+                 "Handstand",
+                 "Prone")
+  ))
+
+#We need mean height for both genders later
+mean_height_males <-
+  lung_data %>%
+  dplyr::filter(
+    Sex == "M")%>%
+  dplyr::filter(
+    order == 1)%>%
+  pull(Height)%>%
+  mean(na.rm =T )
+
+mean_height_females <-
+  lung_data %>%
+  dplyr::filter(
+    Sex == "F")%>%
+  dplyr::filter(
+    order == 1)%>%
+  pull(Height)%>%
+  mean(na.rm =T )
+
+at_frame <-
+  data.frame(Height= c(mean_height_females, mean_height_males) , Sex = c("F", "M"))
+```
+
+We are interested in positional differences for the following variables:
+
+-   R5. 
+
+-   R5R20.
+
+-   AX.
+
+-   Vt. 
+
+-   SAT. 
+
+-   Puls.
+
+-   DLCOc. (primary finding)
+
+-   KCO. 
+
+-   VA. 
+
+-   BHT, VIN, VINAFTOTAL, R5CV, AXCV, Vt.
+
+Results should be corrected for sex & height. 
+
+Se the sketch for proposed graphics for DLCOc, KCO & VA. Plots should have model means as well as individual data points. (I'll color by sex as well to show the correction)
+
+## Table 1
+
+Så herunder viser vi de "rå" værdier målt ved hver position for hvert køn (eller samlet) med rent deskriptiv statistik. Senere sammenligner vi med Standing og får P-værdier for sammenligningen.
+
+```{r Table1}
+
+t1_chars<-table1(
+  ~ Age + Height + Weight |Sex,
+  data = lung_data%>%dplyr::filter(order == 1),
+ render.continuous=c(.="Mean (SD)", 
+                     .="Median [Q1,Q3]"),
+)
+t1_chars
+#t1_chars%>%as.data.frame()
+
+
+#t2<-table1(
+ # ~ DLCOc|posture,
+#  overall = F,
+#  data = lung_data
+#)
+
+#t2
+t2_sex<-table1(
+ ~ DLCOc+
+   KCO+
+   R5+
+   R5CV+
+   R5R20+
+   AX+
+   Vt+
+   SAT+
+   Puls+
+   VA+
+   VIN+
+   VINAFTOTAL+
+   AXCV+
+   BTSYS+
+   BTDIA|Sex+posture,
+ render.continuous=c(.="Mean (SD)", 
+                     .="Median [Q1,Q3]"),
+  data = lung_data
+)
+
+t2_sex
+t2_sex %>%as.data.frame()
+```
+
+## Models
+
+Her søger vi lidt efter den rette model, det er vigtigt for analysen at vise at Sex:Posture og Visit:Posture ikke er signifikant.
+
+### DLCO
+
+```{r DLCO, output=F, echo =F}
+DLCO_model_full <-
+  lmm(
+    formula = DLCOc ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(DLCO_model_full)
+anova(DLCO_model_full)
+plot(DLCO_model_full, type = "scatterplot")
+plot(DLCO_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+DLCO_model <-
+  lmm(
+    formula = DLCOc ~0+posture+
+      (0+Sex) + Height,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(DLCO_model)
+anova(DLCO_model)
+plot(DLCO_model, type = "scatterplot")
+plot(DLCO_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+DLCO_model_sanity <-
+  lmm(
+    formula = DLCOc ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(DLCO_model_sanity)
+plot(DLCO_model_sanity, type = "scatterplot")
+plot(DLCO_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+DLCO_model_insanity <-
+  lmm(
+    formula = DLCOc ~ 
+      Sex + Height+posture+order:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(DLCO_model_insanity)
+plot(DLCO_model_insanity, type = "scatterplot")
+plot(DLCO_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+DLCO_model_interact <-
+  lmm(
+    formula = DLCOc ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(DLCO_model_interact)
+plot(DLCO_model_interact, type = "scatterplot")
+interact_plot_DLCO<-
+  plot(DLCO_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(DLCO_model_sanity)
+model.tables(DLCO_model)
+
+```
+
+Alt i alt er det denne model der er spændende for DLCO
+
+```{r}
+summary(DLCO_model)
+plot(DLCO_model, color = "Sex", 
+     time.var = "posture",
+     ci = T,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3,
+     ci.alpha = 0.02,
+     mean.size = c(5,0))
+##Comparisons:
+comp_DLCO_model<-effects(DLCO_model, type = "difference", variable = "posture", repetition = "1")
+comp_DLCO_model
+
+
+```
+
+### KCO
+
+```{r KCO, output = F, echo = F}
+KCO_model_full <-
+  lmm(
+    formula = KCO ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(KCO_model_full)
+anova(KCO_model_full)
+plot(KCO_model_full, type = "scatterplot")
+plot(KCO_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+KCO_model <-
+  lmm(
+    formula = KCO ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(KCO_model)
+anova(KCO_model)
+plot(KCO_model, type = "scatterplot")
+plot(KCO_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+KCO_model_sanity <-
+  lmm(
+    formula = KCO ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(KCO_model_sanity)
+plot(KCO_model_sanity, type = "scatterplot")
+plot(KCO_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+KCO_model_insanity <-
+  lmm(
+    formula = KCO ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(KCO_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(KCO_model_insanity, type = "scatterplot")
+plot(KCO_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+KCO_model_interact <-
+  lmm(
+    formula = KCO ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(KCO_model_interact)
+plot(KCO_model_interact, type = "scatterplot")
+interact_plot_KCO<-
+  plot(KCO_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(KCO_model_sanity)
+model.tables(KCO_model)
+
+```
+
+Alt i alt er det denne model der er spændende for KCO
+
+```{r}
+summary(KCO_model)
+plot(KCO_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+comp_KCO_model<-effects(KCO_model, type = "difference", variable = "posture", repetition = "1")
+comp_KCO_model
+
+
+```
+
+### VA
+
+```{r VA, output = F, echo = F}
+VA_model_full <-
+  lmm(
+    formula = VA ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VA_model_full)
+anova(VA_model_full)
+plot(VA_model_full, type = "scatterplot")
+plot(VA_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+VA_model <-
+  lmm(
+    formula = VA ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VA_model)
+anova(VA_model)
+plot(VA_model, type = "scatterplot")
+plot(VA_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VA_model_sanity <-
+  lmm(
+    formula = VA ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(VA_model_sanity)
+plot(VA_model_sanity, type = "scatterplot")
+plot(VA_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VA_model_insanity <-
+  lmm(
+    formula = VA ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(VA_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(VA_model_insanity, type = "scatterplot")
+plot(VA_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VA_model_interact <-
+  lmm(
+    formula = VA ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VA_model_interact)
+plot(VA_model_interact, type = "scatterplot")
+interact_plot_VA<-
+  plot(VA_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(VA_model_sanity)
+model.tables(VA_model)
+
+```
+
+Alt i alt er det denne model der er spændende for VA
+
+```{r}
+summary(VA_model)
+
+plot(VA_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+comp_VA_model<-effects(VA_model, type = "difference", variable = "posture", repetition = "1")
+comp_VA_model
+
+```
+
+### R5
+
+```{r R5, output = F ,echo = F}
+R5_model_full <-
+  lmm(
+    formula = R5 ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5_model_full)
+anova(R5_model_full)
+plot(R5_model_full, type = "scatterplot")
+plot(R5_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+R5_model <-
+  lmm(
+    formula = R5 ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5_model)
+anova(R5_model)
+plot(R5_model, type = "scatterplot")
+plot(R5_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5_model_sanity <-
+  lmm(
+    formula = R5 ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(R5_model_sanity)
+plot(R5_model_sanity, type = "scatterplot")
+plot(R5_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5_model_insanity <-
+  lmm(
+    formula = R5 ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(R5_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(R5_model_insanity, type = "scatterplot")
+plot(R5_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5_model_interact <-
+  lmm(
+    formula = R5 ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5_model_interact)
+plot(R5_model_interact, type = "scatterplot")
+interact_plot_R5<-
+  plot(R5_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(R5_model_sanity)
+model.tables(R5_model)
+
+
+
+plot(R5_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)$plot%>%
+plotly::ggplotly()
+```
+
+Alt i alt er det denne model der er spændende for R5
+
+```{r}
+summary(R5_model)
+plot(R5_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+comp_R5_model<-effects(R5_model, type = "difference", variable = "posture", repetition = "1")
+comp_R5_model
+```
+
+### R5R20
+
+```{r R5R20, output = F, echo = F}
+R5R20_model_full <-
+  lmm(
+    formula = R5R20 ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5R20_model_full)
+anova(R5R20_model_full)
+plot(R5R20_model_full, type = "scatterplot")
+plot(R5R20_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+R5R20_model <-
+  lmm(
+    formula = R5R20 ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5R20_model)
+anova(R5R20_model)
+plot(R5R20_model, type = "scatterplot")
+plot(R5R20_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5R20_model_sanity <-
+  lmm(
+    formula = R5R20 ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(R5R20_model_sanity)
+plot(R5R20_model_sanity, type = "scatterplot")
+plot(R5R20_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5R20_model_insanity <-
+  lmm(
+    formula = R5R20 ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(R5R20_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(R5R20_model_insanity, type = "scatterplot")
+plot(R5R20_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5R20_model_interact <-
+  lmm(
+    formula = R5R20 ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5R20_model_interact)
+plot(R5R20_model_interact, type = "scatterplot")
+interact_plot_R5R20<-
+  plot(R5R20_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(R5R20_model_sanity)
+model.tables(R5R20_model)
+
+```
+
+Alt i alt er det denne model der er spændende for R5R20
+
+```{r}
+summary(R5R20_model)
+plot(R5R20_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+comp_R5R20_model<-effects(R5R20_model, type = "difference", variable = "posture", repetition = "1")
+comp_R5R20_model
+
+```
+
+### AX
+
+```{r AX, output = F, echo = F}
+AX_model_full <-
+  lmm(
+    formula = AX ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(AX_model_full)
+anova(AX_model_full)
+plot(AX_model_full, type = "scatterplot")
+plot(AX_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+AX_model <-
+  lmm(
+    formula = AX ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(AX_model)
+anova(AX_model)
+plot(AX_model, type = "scatterplot")
+plot(AX_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+AX_model_sanity <-
+  lmm(
+    formula = AX ~ 0+
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(AX_model_sanity)
+plot(AX_model_sanity, type = "scatterplot")
+plot(AX_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+AX_model_insanity <-
+  lmm(
+    formula = AX ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(AX_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(AX_model_insanity, type = "scatterplot")
+plot(AX_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+AX_model_interact <-
+  lmm(
+    formula = AX ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(AX_model_interact)
+plot(AX_model_interact, type = "scatterplot")
+interact_plot_AX<-
+  plot(AX_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(AX_model_sanity)
+model.tables(AX_model)
+
+```
+
+Alt i alt er det denne model der er spændende for AX
+
+```{r}
+summary(AX_model)
+plot(AX_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+comp_AX_model<-effects(AX_model, type = "difference", variable = "posture", repetition = "1")
+comp_AX_model
+
+```
+
+### Vt
+
+```{r Vt, output = F, echo = F}
+Vt_model_full <-
+  lmm(
+    formula = Vt ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(Vt_model_full)
+anova(Vt_model_full)
+plot(Vt_model_full, type = "scatterplot")
+plot(Vt_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+Vt_model <-
+  lmm(
+    formula = Vt ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(Vt_model)
+anova(Vt_model)
+plot(Vt_model, type = "scatterplot")
+plot(Vt_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+Vt_model_sanity <-
+  lmm(
+    formula = Vt ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(Vt_model_sanity)
+plot(Vt_model_sanity, type = "scatterplot")
+plot(Vt_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+Vt_model_insanity <-
+  lmm(
+    formula = Vt ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(Vt_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(Vt_model_insanity, type = "scatterplot")
+plot(Vt_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+Vt_model_interact <-
+  lmm(
+    formula = Vt ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(Vt_model_interact)
+plot(Vt_model_interact, type = "scatterplot")
+interact_plot_Vt<-
+  plot(Vt_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(Vt_model_sanity)
+model.tables(Vt_model)
+
+```
+
+Alt i alt er det denne model der er spændende for Vt
+
+```{r}
+summary(Vt_model)
+plot(Vt_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+plot(Vt_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)$plot%>%
+  ggplotly()
+
+
+comp_Vt_model<-effects(Vt_model, type = "difference", variable = "posture", repetition = "1")
+comp_Vt_model
+
+```
+
+### SAT
+
+```{r SAT, output = F, echo = F}
+SAT_model_full <-
+  lmm(
+    formula = SAT ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(SAT_model_full)
+anova(SAT_model_full)
+plot(SAT_model_full, type = "scatterplot")
+plot(SAT_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+SAT_model <-
+  lmm(
+    formula = SAT ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(SAT_model)
+anova(SAT_model)
+plot(SAT_model, type = "scatterplot")
+plot(SAT_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+SAT_model_sanity <-
+  lmm(
+    formula = SAT ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(SAT_model_sanity)
+plot(SAT_model_sanity, type = "scatterplot")
+plot(SAT_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+SAT_model_insanity <-
+  lmm(
+    formula = SAT ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(SAT_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(SAT_model_insanity, type = "scatterplot")
+plot(SAT_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+SAT_model_interact <-
+  lmm(
+    formula = SAT ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(SAT_model_interact)
+plot(SAT_model_interact, type = "scatterplot")
+interact_plot_SAT<-
+  plot(SAT_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(SAT_model_sanity)
+model.tables(SAT_model)
+
+```
+
+Alt i alt er det denne model der er spændende for SAT
+
+```{r}
+summary(SAT_model)
+plot(SAT_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+
+comp_SAT_model<-effects(SAT_model, type = "difference", variable = "posture", repetition = "1")
+comp_SAT_model
+```
+
+### Puls
+
+```{r PULS, output = F, echo = F}
+#Puls_model_full <-
+#  lmm(
+#    formula = Puls ~ 
+#      Sex + Height + order:posture + posture + Sex:posture,
+#    repetition = ~order | ID,
+#    structure = "UN",
+#    data = lung_data
+#  )
+
+#summary(Puls_model_full)
+#anova(Puls_model_full)
+#plot(Puls_model_full, type = "scatterplot")
+#plot(Puls_model_full, color = "Sex", 
+#     time.var = "posture",
+#     ci = F,
+#     at = data.frame(Height= c(mean_height_females)),
+#     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+Puls_model <-
+  lmm(
+    formula = Puls ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(Puls_model)
+anova(Puls_model)
+plot(Puls_model, type = "scatterplot")
+plot(Puls_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+Puls_model_sanity <-
+  lmm(
+    formula = Puls ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(Puls_model_sanity)
+plot(Puls_model_sanity, type = "scatterplot")
+plot(Puls_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+Puls_model_insanity <-
+  lmm(
+    formula = Puls ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(Puls_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(Puls_model_insanity, type = "scatterplot")
+plot(Puls_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+Puls_model_interact <-
+  lmm(
+    formula = Puls ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(Puls_model_interact)
+plot(Puls_model_interact, type = "scatterplot")
+interact_plot_Puls<-
+  plot(Puls_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(Puls_model_sanity)
+model.tables(Puls_model)
+
+```
+
+Alt i alt er det denne model der er spændende for Puls
+
+```{r}
+summary(Puls_model)
+plot(Puls_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+
+comp_Puls_model<-effects(Puls_model, type = "difference", variable = "posture", repetition = "1")
+comp_Puls_model
+```
+
+### BHT
+
+```{r BHT, output = F, echo = F}
+BHT_model_full <-
+  lmm(
+    formula = BHT ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BHT_model_full)
+anova(BHT_model_full)
+plot(BHT_model_full, type = "scatterplot")
+plot(BHT_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+BHT_model <-
+  lmm(
+    formula = BHT ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BHT_model)
+anova(BHT_model)
+plot(BHT_model, type = "scatterplot")
+plot(BHT_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BHT_model_sanity <-
+  lmm(
+    formula = BHT ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(BHT_model_sanity)
+plot(BHT_model_sanity, type = "scatterplot")
+plot(BHT_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BHT_model_insanity <-
+  lmm(
+    formula = BHT ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(BHT_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(BHT_model_insanity, type = "scatterplot")
+plot(BHT_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BHT_model_interact <-
+  lmm(
+    formula = BHT ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BHT_model_interact)
+plot(BHT_model_interact, type = "scatterplot")
+interact_plot_BHT<-
+  plot(BHT_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(BHT_model_sanity)
+model.tables(BHT_model)
+
+```
+
+Alt i alt er det denne model der er spændende for BHT
+
+```{r}
+summary(BHT_model)
+plot(BHT_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+comp_BHT_model<-effects(BHT_model, type = "difference", variable = "posture", repetition = "1")
+comp_BHT_model
+
+```
+
+### VIN
+
+```{r VIN, output = F, echo = F}
+VIN_model_full <-
+  lmm(
+    formula = VIN ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VIN_model_full)
+anova(VIN_model_full)
+plot(VIN_model_full, type = "scatterplot")
+plot(VIN_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+VIN_model <-
+  lmm(
+    formula = VIN ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VIN_model)
+anova(VIN_model)
+plot(VIN_model, type = "scatterplot")
+plot(VIN_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VIN_model_sanity <-
+  lmm(
+    formula = VIN ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(VIN_model_sanity)
+plot(VIN_model_sanity, type = "scatterplot")
+plot(VIN_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VIN_model_insanity <-
+  lmm(
+    formula = VIN ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(VIN_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(VIN_model_insanity, type = "scatterplot")
+plot(VIN_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VIN_model_interact <-
+  lmm(
+    formula = VIN ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VIN_model_interact)
+plot(VIN_model_interact, type = "scatterplot")
+interact_plot_VIN<-
+  plot(VIN_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(VIN_model_sanity)
+model.tables(VIN_model)
+
+```
+
+Alt i alt er det denne model der er spændende for VIN
+
+```{r}
+summary(VIN_model)
+plot(VIN_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+comp_VIN_model<-effects(VIN_model, type = "difference", variable = "posture", repetition = "1")
+comp_VIN_model
+
+```
+
+### VINAFTOTAL
+
+```{r VINAFTOTAL, output = F, echo = F}
+VINAFTOTAL_model_full <-
+  lmm(
+    formula = VINAFTOTAL ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VINAFTOTAL_model_full)
+anova(VINAFTOTAL_model_full)
+plot(VINAFTOTAL_model_full, type = "scatterplot")
+plot(VINAFTOTAL_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+VINAFTOTAL_model <-
+  lmm(
+    formula = VINAFTOTAL ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VINAFTOTAL_model)
+anova(VINAFTOTAL_model)
+plot(VINAFTOTAL_model, type = "scatterplot")
+plot(VINAFTOTAL_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VINAFTOTAL_model_sanity <-
+  lmm(
+    formula = VINAFTOTAL ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(VINAFTOTAL_model_sanity)
+plot(VINAFTOTAL_model_sanity, type = "scatterplot")
+plot(VINAFTOTAL_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VINAFTOTAL_model_insanity <-
+  lmm(
+    formula = VINAFTOTAL ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(VINAFTOTAL_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(VINAFTOTAL_model_insanity, type = "scatterplot")
+plot(VINAFTOTAL_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+VINAFTOTAL_model_interact <-
+  lmm(
+    formula = VINAFTOTAL ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(VINAFTOTAL_model_interact)
+plot(VINAFTOTAL_model_interact, type = "scatterplot")
+interact_plot_VINAFTOTAL<-
+  plot(VINAFTOTAL_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(VINAFTOTAL_model_sanity)
+model.tables(VINAFTOTAL_model)
+
+```
+
+Alt i alt er det denne model der er spændende for VINAFTOTAL
+
+```{r}
+summary(VINAFTOTAL_model)
+plot(VINAFTOTAL_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+comp_VINAFTOTAL_model<-effects(VINAFTOTAL_model, type = "difference", variable = "posture", repetition = "1")
+comp_VINAFTOTAL_model
+
+```
+
+### R5CV
+
+```{r R5CV, output = F, echo = F}
+R5CV_model_full <-
+  lmm(
+    formula = R5CV ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5CV_model_full)
+anova(R5CV_model_full)
+plot(R5CV_model_full, type = "scatterplot")
+plot(R5CV_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+R5CV_model <-
+  lmm(
+    formula = R5CV ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5CV_model)
+anova(R5CV_model)
+plot(R5CV_model, type = "scatterplot")
+plot(R5CV_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5CV_model_sanity <-
+  lmm(
+    formula = R5CV ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(R5CV_model_sanity)
+plot(R5CV_model_sanity, type = "scatterplot")
+plot(R5CV_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5CV_model_insanity <-
+  lmm(
+    formula = R5CV ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(R5CV_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(R5CV_model_insanity, type = "scatterplot")
+plot(R5CV_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+R5CV_model_interact <-
+  lmm(
+    formula = R5CV ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(R5CV_model_interact)
+plot(R5CV_model_interact, type = "scatterplot")
+interact_plot_R5CV<-
+  plot(R5CV_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(R5CV_model_sanity)
+model.tables(R5CV_model)
+
+```
+
+Alt i alt er det denne model der er spændende for R5CV
+
+```{r}
+summary(R5CV_model)
+plot(R5CV_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+
+comp_R5CV_model<-effects(R5CV_model, type = "difference", variable = "posture", repetition = "1")
+comp_R5CV_model
+```
+
+### AXCV
+
+```{r AXCV, output = F, echo = F}
+AXCV_model_full <-
+  lmm(
+    formula = AXCV ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(AXCV_model_full)
+anova(AXCV_model_full)
+plot(AXCV_model_full, type = "scatterplot")
+plot(AXCV_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+AXCV_model <-
+  lmm(
+    formula = AXCV ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(AXCV_model)
+anova(AXCV_model)
+plot(AXCV_model, type = "scatterplot")
+plot(AXCV_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+AXCV_model_sanity <-
+  lmm(
+    formula = AXCV ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(AXCV_model_sanity)
+plot(AXCV_model_sanity, type = "scatterplot")
+plot(AXCV_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+AXCV_model_insanity <-
+  lmm(
+    formula = AXCV ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(AXCV_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(AXCV_model_insanity, type = "scatterplot")
+plot(AXCV_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+AXCV_model_interact <-
+  lmm(
+    formula = AXCV ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(AXCV_model_interact)
+plot(AXCV_model_interact, type = "scatterplot")
+interact_plot_AXCV<-
+  plot(AXCV_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(AXCV_model_sanity)
+model.tables(AXCV_model)
+
+```
+
+Alt i alt er det denne model der er spændende for AXCV
+
+```{r}
+summary(AXCV_model)
+plot(AXCV_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+
+comp_AXCV_model<-effects(AXCV_model, type = "difference", variable = "posture", repetition = "1")
+comp_AXCV_model
+```
+
+### BTDIA
+
+```{r BTDIA, output = F, echo = F}
+BTDIA_model_full <-
+  lmm(
+    formula = BTDIA ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BTDIA_model_full)
+anova(BTDIA_model_full)
+plot(BTDIA_model_full, type = "scatterplot")
+plot(BTDIA_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+BTDIA_model <-
+  lmm(
+    formula = BTDIA ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BTDIA_model)
+anova(BTDIA_model)
+plot(BTDIA_model, type = "scatterplot")
+plot(BTDIA_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BTDIA_model_sanity <-
+  lmm(
+    formula = BTDIA ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(BTDIA_model_sanity)
+plot(BTDIA_model_sanity, type = "scatterplot")
+plot(BTDIA_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BTDIA_model_insanity <-
+  lmm(
+    formula = BTDIA ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(BTDIA_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(BTDIA_model_insanity, type = "scatterplot")
+plot(BTDIA_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BTDIA_model_interact <-
+  lmm(
+    formula = BTDIA ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BTDIA_model_interact)
+plot(BTDIA_model_interact, type = "scatterplot")
+interact_plot_BTDIA<-
+  plot(BTDIA_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(BTDIA_model_sanity)
+model.tables(BTDIA_model)
+
+```
+
+Alt i alt er det denne model der er spændende for BTDIA
+
+```{r}
+summary(BTDIA_model)
+plot(BTDIA_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+
+comp_BTDIA_model<-effects(BTDIA_model, type = "difference", variable = "posture", repetition = "1")
+comp_BTDIA_model
+```
+
+### BTSYS
+
+```{r BTSYS, output = F, echo = F}
+BTSYS_model_full <-
+  lmm(
+    formula = BTSYS ~ 
+      Sex + Height + order:posture + posture + Sex:posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BTSYS_model_full)
+anova(BTSYS_model_full)
+plot(BTSYS_model_full, type = "scatterplot")
+plot(BTSYS_model_full, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom modellen ikke har signifikante interaktioner for Visit:Posture er der ikke nogen effekt af skanningsrækkefølgen. 
+
+BTSYS_model <-
+  lmm(
+    formula = BTSYS ~ 0+
+      Sex + Height+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BTSYS_model)
+anova(BTSYS_model)
+plot(BTSYS_model, type = "scatterplot")
+plot(BTSYS_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BTSYS_model_sanity <-
+  lmm(
+    formula = BTSYS ~ 
+      Sex + Height+posture,
+    repetition = ~posture | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(BTSYS_model_sanity)
+plot(BTSYS_model_sanity, type = "scatterplot")
+plot(BTSYS_model_sanity, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BTSYS_model_insanity <-
+  lmm(
+    formula = BTSYS ~ 
+      Sex + Height+order+posture,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+summary(BTSYS_model_insanity)
+#Fordi Order falder ud når vi korrigerer for posture, så er den ikke signikant og vi kan se bort fra order.
+plot(BTSYS_model_insanity, type = "scatterplot")
+plot(BTSYS_model_insanity, color = "Sex", 
+     time.var = "order",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+BTSYS_model_interact <-
+  lmm(
+    formula = BTSYS ~ 
+      Sex + Height+posture + posture:Sex,
+    repetition = ~order | ID,
+    structure = "UN",
+    data = lung_data
+  )
+
+
+
+summary(BTSYS_model_interact)
+plot(BTSYS_model_interact, type = "scatterplot")
+interact_plot_BTSYS<-
+  plot(BTSYS_model_interact, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+#Eftersom interaktionsled ikke er signifikante bruger vi intet interaktionsled.
+  
+
+model.tables(BTSYS_model_sanity)
+model.tables(BTSYS_model)
+
+```
+
+Alt i alt er det denne model der er spændende for BTSYS
+
+```{r}
+summary(BTSYS_model)
+plot(BTSYS_model, color = "Sex", 
+     time.var = "posture",
+     ci = F,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3)
+
+
+comp_BTSYS_model<-effects(BTSYS_model, type = "difference", variable = "posture", repetition = "1")
+comp_BTSYS_model
+```
+
+## Graphics
+
+### DLCO Graphics
+
+```{r}
+#DLCO
+summary(DLCO_model)
+DLCO_plot<-plot(DLCO_model, color = "Sex", 
+     time.var = "posture",
+     ci = T,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3,
+     ci.alpha = 0.02,
+     mean.size = c(3,0))
+
+DLCO_p_print <-
+  model.tables(comp_DLCO_model)[c(1,8)]%>%
+  mutate(
+    p_print = 
+      case_when(
+        p.value < 0.001 ~ "p < 0.001",
+        p.value > 0.999 ~ "p > 0.999",
+        T~ paste0("p = ", round(p.value,round_sig_level))
+      ))
+DLCO_p_print
+
+y_lev = 8
+
+DLCO_figure1<-
+DLCO_plot$plot+
+  ylim(0,20)+
+  labs(
+    y= bquote(D[L*","*COc]~~~(mmol / min / kPa)),
+    x = "Posture"
+  )+
+  annotate("text", #Comparison Supine - Standing
+           x = 1.5,
+           y = y_lev,
+           label = DLCO_p_print$p_print[1])+
+  annotate("segment",
+           x = 1,
+           xend = 1.2,
+           y=y_lev)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-0.2,
+           yend=y_lev+0.2)+
+  annotate("segment",
+           x = 1.8,
+           xend = 2,
+           y=y_lev)+
+  annotate("segment",
+           x = 2,
+           y=y_lev-0.2,
+           yend=y_lev+0.2)+
+  annotate("text", #Comparison Handstand - Standing
+           x = 2,
+           y = y_lev-2,
+           label = DLCO_p_print$p_print[2])+
+  annotate("segment",
+           x = 1,
+           xend = 1.7,
+           y=y_lev-2)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-2.2,
+           yend=y_lev-1.8)+
+  annotate("segment",
+           x = 2.3,
+           xend = 3,
+           y=y_lev-2)+
+  annotate("segment",
+           x = 3,
+           y=y_lev-2.2,
+           yend=y_lev-1.8)+
+  annotate("text", #Comparison Prone - Standing
+           x = 2.5,
+           y = y_lev-4,
+           label = DLCO_p_print$p_print[3])+
+  annotate("segment",
+           x = 1,
+           xend = 2.2,
+           y=y_lev-4)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-4.2,
+           yend=y_lev-3.8)+
+  annotate("segment",
+           x = 2.8,
+           xend = 4,
+           y=y_lev-4)+
+  annotate("segment",
+           x = 4,
+           y=y_lev-4.2,
+           yend=y_lev-3.8)+
+  annotate("text", #Comparison Supine - Handstand
+           x = 2.5,
+           y = 16,
+           label = DLCO_p_print$p_print[4])+
+  annotate("segment",
+           x = 2,
+           xend = 2.2,
+           y=16)+
+  annotate("segment",
+           x = 2,
+           y=15.8,
+           yend=16.2)+
+  annotate("segment",
+           x = 2.8,
+           xend = 3,
+           y=16)+
+  annotate("segment",
+           x = 3,
+           y=15.8,
+           yend=16.2)+
+  annotate("text", #Comparison Prone - Supine
+           x = 3,
+           y = 18,
+           label = DLCO_p_print$p_print[5])+
+  annotate("segment",
+           x = 2,
+           xend = 2.7,
+           y=18)+
+  annotate("segment",
+           x = 2,
+           y=17.8,
+           yend=18.2)+
+  annotate("segment",
+           x = 3.3,
+           xend = 4,
+           y=18)+
+  annotate("segment",
+           x = 4,
+           y=17.8,
+           yend=18.2)+
+  annotate("text", #Comparison Prone - Handstand
+           x = 3.5,
+           y = 2,
+           label = DLCO_p_print$p_print[6])+
+  annotate("segment",
+           x = 3,
+           xend = 3.2,
+           y=2)+
+  annotate("segment",
+           x = 3,
+           y=1.8,
+           yend=2.2)+
+  annotate("segment",
+           x = 3.8,
+           xend = 4,
+           y=2)+
+  annotate("segment",
+           x = 4,
+           y=1.8,
+           yend=2.2)+
+  labs(x="Posture")+
+  theme_bw()
+  
+DLCO_figure1
+
+ggsave(
+  filename = here("Output","Graphics","DLCO.jpg"),
+  plot = DLCO_figure1
+)
+
+ggsave(
+  filename = here("Output","Graphics","DLCO.svg"),
+  plot = DLCO_figure1
+)
+```
+
+### KCO Graphics
+
+```{r}
+#KCO
+summary(KCO_model)
+KCO_plot<-plot(KCO_model, color = "Sex", 
+     time.var = "posture",
+     ci = T,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3,
+     ci.alpha = 0.02,
+     mean.size = c(3,0))
+
+KCO_p_print <-
+  model.tables(comp_KCO_model)[c(1,8)]%>%
+  mutate(
+    p_print = 
+      case_when(
+        p.value < 0.001 ~ "p < 0.001",
+        p.value > 0.999 ~ "p > 0.999",
+        T~ paste0("p = ", round(p.value,round_sig_level))
+      ))
+KCO_p_print
+
+y_lev = 1.5
+y_diff = 0.25
+
+KCO_figure1<-
+KCO_plot$plot+
+  ylim(0,3)+
+  labs(
+    y= bquote(K[CO]~~(mmol / min / kPa)),
+    x = "Posture"
+  )+
+  annotate("text", #Comparison Supine - Standing
+           x = 1.5,
+           y = y_lev,
+           label = KCO_p_print$p_print[1])+
+  annotate("segment",
+           x = 1,
+           xend = 1.2,
+           y=y_lev)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-0.05,
+           yend=y_lev+0.05)+
+  annotate("segment",
+           x = 1.8,
+           xend = 2,
+           y=y_lev)+
+  annotate("segment",
+           x = 2,
+           y=y_lev-0.05,
+           yend=y_lev+0.05)+
+  annotate("text", #Comparison Handstand - Standing
+           x = 2,
+           y = y_lev-y_diff,
+           label = KCO_p_print$p_print[2])+
+  annotate("segment",
+           x = 1,
+           xend = 1.7,
+           y=y_lev-y_diff)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-y_diff-0.05,
+           yend=y_lev-y_diff+0.05)+
+  annotate("segment",
+           x = 2.3,
+           xend = 3,
+           y=y_lev-y_diff)+
+  annotate("segment",
+           x = 3,
+           y=y_lev-y_diff-0.05,
+           yend=y_lev-y_diff+0.05)+
+  annotate("text", #Comparison Prone - Standing
+           x = 2.5,
+           y = y_lev-2*y_diff,
+           label = KCO_p_print$p_print[3])+
+  annotate("segment",
+           x = 1,
+           xend = 2.2,
+           y=y_lev-2*y_diff)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-2*y_diff-0.05,
+           yend=y_lev-2*y_diff+0.05)+
+  annotate("segment",
+           x = 2.8,
+           xend = 4,
+           y=y_lev-2*y_diff)+
+  annotate("segment",
+           x = 4,
+           y=y_lev-2*y_diff-0.05,
+           yend=y_lev-2*y_diff+0.05)+
+  annotate("text", #Comparison Supine - Handstand
+           x = 2.5,
+           y = 1.75,
+           label = KCO_p_print$p_print[4])+
+  annotate("segment",
+           x = 2,
+           xend = 2.2,
+           y=1.75)+
+  annotate("segment",
+           x = 2,
+           y=1.70,
+           yend=1.80)+
+  annotate("segment",
+           x = 2.8,
+           xend = 3,
+           y=1.75)+
+  annotate("segment",
+           x = 3,
+           y=1.70,
+           yend=1.80)+
+  annotate("text", #Comparison Supine - prone
+           x = 3,
+           y = 2.75,
+           label = KCO_p_print$p_print[5])+
+  annotate("segment",
+           x = 2,
+           xend = 2.7,
+           y=2.75)+
+  annotate("segment",
+           x = 2,
+           y=2.7,
+           yend=2.8)+
+  annotate("segment",
+           x = 3.3,
+           xend = 4,
+           y=2.75)+
+  annotate("segment",
+           x = 4,
+           y=2.7,
+           yend=2.8)+
+  annotate("text", #Comparison Handstand - Prone
+           x = 3.5,
+           y = y_lev-3*y_diff,
+           label = KCO_p_print$p_print[6])+
+  annotate("segment",
+           x = 3,
+           xend = 3.2,
+           y=y_lev-3*y_diff)+
+  annotate("segment",
+           x = 3,,
+           y=y_lev-3*y_diff-0.05,
+           yend=y_lev-3*y_diff+0.05)+
+  annotate("segment",
+           x = 3.8,
+           xend = 4,
+           y=y_lev-3*y_diff)+
+  annotate("segment",
+           x = 4,,
+           y=y_lev-3*y_diff-0.05,
+           yend=y_lev-3*y_diff+0.05)+
+  labs(x="Posture")+
+  theme_bw()
+  
+KCO_figure1
+
+ggsave(
+  filename = here("Output","Graphics","KCO.jpg"),
+  plot = KCO_figure1
+)
+
+ggsave(
+  filename = here("Output","Graphics","KCO.svg"),
+  plot = KCO_figure1
+)
+```
+
+### VA Graphics
+
+```{r}
+#VA
+summary(VA_model)
+VA_plot<-plot(VA_model, color = "Sex", 
+     time.var = "posture",
+     ci = T,
+     at = data.frame(Height= c(mean_height_females)),
+     obs.alpha = 0.3,
+     ci.alpha = 0.02,
+     mean.size = c(3,0))
+
+VA_p_print <-
+  model.tables(comp_VA_model)[c(1,8)]%>%
+  mutate(
+    p_print = 
+      case_when(
+        p.value < 0.001 ~ "p < 0.001",
+        p.value > 0.999 ~ "p > 0.999",
+        T~ paste0("p = ", round(p.value,round_sig_level))
+      ))
+VA_p_print
+
+y_lev = 4
+y_diff = 0.5
+
+VA_figure1<-
+VA_plot$plot+
+  ylim(0,10)+
+  labs(
+    y= bquote(V[A]~~(L)),
+    x = "Posture"
+  )+
+  annotate("text", #Comparison Supine - Standing
+           x = 1.5,
+           y = y_lev,
+           label = VA_p_print$p_print[1])+
+  annotate("segment",
+           x = 1,
+           xend = 1.2,
+           y=y_lev)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-0.05,
+           yend=y_lev+0.05)+
+  annotate("segment",
+           x = 1.8,
+           xend = 2,
+           y=y_lev)+
+  annotate("segment",
+           x = 2,
+           y=y_lev-0.05,
+           yend=y_lev+0.05)+
+  annotate("text", #Comparison Handstand - Standing
+           x = 2,
+           y = y_lev-y_diff,
+           label = VA_p_print$p_print[2])+
+  annotate("segment",
+           x = 1,
+           xend = 1.7,
+           y=y_lev-y_diff)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-y_diff-0.05,
+           yend=y_lev-y_diff+0.05)+
+  annotate("segment",
+           x = 2.3,
+           xend = 3,
+           y=y_lev-y_diff)+
+  annotate("segment",
+           x = 3,
+           y=y_lev-y_diff-0.05,
+           yend=y_lev-y_diff+0.05)+
+  annotate("text", #Comparison Prone - Standing
+           x = 2.5,
+           y = y_lev-2*y_diff,
+           label = VA_p_print$p_print[3])+
+  annotate("segment",
+           x = 1,
+           xend = 2.2,
+           y=y_lev-2*y_diff)+
+  annotate("segment",
+           x = 1,
+           y=y_lev-2*y_diff-0.05,
+           yend=y_lev-2*y_diff+0.05)+
+  annotate("segment",
+           x = 2.8,
+           xend = 4,
+           y=y_lev-2*y_diff)+
+  annotate("segment",
+           x = 4,
+           y=y_lev-2*y_diff-0.05,
+           yend=y_lev-2*y_diff+0.05)+
+  annotate("text", #Comparison Supine - Handstand
+           x = 2.5,
+           y = y_lev-3*y_diff,
+           label = VA_p_print$p_print[4])+
+  annotate("segment",
+           x = 2,
+           xend = 2.2,
+           y=y_lev-3*y_diff)+
+  annotate("segment",
+           x = 2,
+           y=y_lev-3*y_diff-0.05,
+           yend=y_lev-3*y_diff+0.05)+
+  annotate("segment",
+           x = 2.8,
+           xend = 3,
+           y=y_lev-3*y_diff)+
+  annotate("segment",
+           x = 3,
+           y=y_lev-3*y_diff-0.05,
+           yend=y_lev-3*y_diff+0.05)+
+  annotate("text", #Comparison Supine - Prone
+           x = 3,
+           y = y_lev-4*y_diff,
+           label = VA_p_print$p_print[5])+
+  annotate("segment",
+           x = 2,
+           xend = 2.7,
+           y=y_lev-4*y_diff)+
+  annotate("segment",
+           x = 2,
+           y=y_lev-4*y_diff-0.05,
+           yend=y_lev-4*y_diff+0.05)+
+  annotate("segment",
+           x = 3.3,
+           xend = 4,
+           y=y_lev-4*y_diff)+
+  annotate("segment",
+           x = 4,
+           y=y_lev-4*y_diff-0.05,
+           yend=y_lev-4*y_diff+0.05)+
+  annotate("text", #Comparison Prone - Handstand
+           x = 3.5,
+           y = y_lev,
+           label = VA_p_print$p_print[6])+
+  annotate("segment",
+           x = 3,
+           xend = 3.2,
+           y=y_lev)+
+  annotate("segment",
+           x = 3,,
+           y=y_lev-0.05,
+           yend=y_lev+0.05)+
+  annotate("segment",
+           x = 3.8,
+           xend = 4,
+           y=y_lev)+
+  annotate("segment",
+           x = 4,,
+           y=y_lev-0.05,
+           yend=y_lev+0.05)+
+  labs(x="Posture")+
+  theme_bw()
+  
+VA_figure1
+
+ggsave(
+  filename = here("Output","Graphics","VA.jpg"),
+  plot = VA_figure1
+)
+
+ggsave(
+  filename = here("Output","Graphics","VA.svg"),
+  plot = VA_figure1
+)
+```
+
+### Combined Graphics
+
+```{r}
+#install.packages("patchwork")
+library(patchwork)
+
+figure1 <-
+  (DLCO_figure1 + plot_spacer()+ KCO_figure1)/
+  (plot_spacer()+VA_figure1+plot_spacer())
+
+layout <- "
+  AAAAA#D#BBBBB
+  AAAAA#D#BBBBB
+  ####CCCCC####
+  ####CCCCC####
+"
+
+figure_1_diff_layout<-
+  DLCO_figure1 + 
+  KCO_figure1 + 
+  VA_figure1 +  
+  guide_area() +
+  plot_layout(design = layout, guides = "collect")
+
+figure1 %>%
+  ggsave(
+    plot = .,
+    filename = here("Output","Graphics","Combined_figure_1.jpg"),
+                    width = 39,
+                    height = 18,
+                    units = "cm") 
+  
+
+figure_1_diff_layout%>%
+  ggsave(
+    plot = .,
+    filename = here("Output","Graphics","Combined_figure_diff_layout_1.jpg"),
+                    width = 39,
+                    height = 18,
+                    units = "cm") 
+figure_1_diff_layout%>%
+  ggsave(
+    plot = .,
+    filename = here("Output","Graphics","Combined_figure_diff_layout_1.svg"),
+                    width = 39,
+                    height = 18,
+                    units = "cm") 
+
+figure_1_diff_layout
+```
